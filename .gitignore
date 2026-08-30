@@ -1,0 +1,8 @@
+node_modules/
+dist/
+public/
+.env
+.dev.vars*
+.wrangler/
+
+.zcode/plans/

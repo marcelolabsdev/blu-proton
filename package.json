@@ -1,0 +1,45 @@
+{
+	"name": "8lab",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"build:ui": "vite build --config web/vite.config.ts",
+		"deploy": "npm run build:ui && vite build && wrangler deploy",
+		"check:types": "tsc --noEmit",
+		"check:types:ui": "tsc --noEmit -p web/tsconfig.json"
+	},
+	"dependencies": {
+		"@composio/core": "^0.18.0",
+		"@earendil-works/pi-ai": "^0.83.0",
+		"@flue/react": "^2.0.3",
+		"@flue/runtime": "^2.0.3",
+		"@flue/sdk": "^2.0.3",
+		"@flue/telegram": "^2.0.3",
+		"grammy": "^1.45.1",
+		"hono": "^4.7.0",
+		"react": "^19.2.8",
+		"react-dom": "^19.2.8",
+		"react-markdown": "^10.1.0",
+		"remark-gfm": "^4.0.1",
+		"valibot": "^1.4.2"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.39.2",
+		"@flue/cli": "^2.0.3",
+		"@flue/vite": "^2.0.3",
+		"@types/node": "^22.10.10",
+		"@types/react": "^19.2.18",
+		"@types/react-dom": "^19.2.5",
+		"@vitejs/plugin-react": "^6.1.0",
+		"typescript": "^7.0.2",
+		"vite": "^8.0.14",
+		"wrangler": "^4.113.0"
+	},
+	"overrides": {
+		"@flue/telegram": {
+			"hono": "^4.13.5"
+		}
+	}
+}
