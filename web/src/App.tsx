@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Chat } from './Chat.tsx';
 import {
+	BotIcon,
 	CloseIcon,
 	MoreHorizontalIcon,
 	PanelLeftIcon,
 	PencilIcon,
 	PlusIcon,
 	SearchIcon,
-	SparklesIcon,
 	TrashIcon,
 } from './icons.tsx';
 
-const PASSCODE_KEY = 'flue-chat-passcode';
+export const PASSCODE_KEY = 'flue-chat-passcode';
 const CONVERSATION_KEY = 'flue-chat-conversation-id';
 const CONVERSATIONS_KEY = 'flue-chat-conversations';
 const DAY_MS = 86_400_000;
@@ -135,7 +135,7 @@ function PasscodeGate({ onUnlock }: { onUnlock: (passcode: string) => void }) {
 	return (
 		<div className="gate-wrap">
 			<form className="gate" onSubmit={submit}>
-				<h1>8lab Chat</h1>
+				<h1>Agente</h1>
 				<p>Introduce el passcode para hablar con el agente.</p>
 				<input
 					className="gate-input"
@@ -221,9 +221,19 @@ export function App() {
 		// A blank chat isn't listed until the first message is sent
 		// (recordActivity adds it), so there is nothing to duplicate.
 		const current = conversations.find((entry) => entry.id === activeId);
-		if (!current) return;
-		setActiveId(newConversationId());
 		setSidebarOpen(false);
+		// The keyboard cursor always lands on the composer, even when the
+		// current blank chat is reused (no remount happens then).
+		const focusComposer = () =>
+			requestAnimationFrame(() =>
+				(document.querySelector('.input-group-textarea') as HTMLTextAreaElement | null)?.focus(),
+			);
+		if (!current) {
+			focusComposer();
+			return;
+		}
+		setActiveId(newConversationId());
+		focusComposer();
 	}
 
 	function deleteConversation(id: string) {
@@ -252,14 +262,25 @@ export function App() {
 	}
 
 	const [draggingId, setDraggingId] = useState<string | null>(null);
-	const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+	const [dropTarget, setDropTarget] = useState<{ id: string; after: boolean } | null>(
+		null,
+	);
 
-	function moveConversation(dragId: string, targetId: string) {
+	// Drop position: inserting "before" when the pointer is on the upper half
+	// of the target row and "after" on the lower half — otherwise drops that
+	// should push the item down land one position too high, and the last slot
+	// is unreachable.
+	function dropAfter(event: React.DragEvent<HTMLDivElement>): boolean {
+		const rect = event.currentTarget.getBoundingClientRect();
+		return event.clientY > rect.top + rect.height / 2;
+	}
+
+	function moveConversation(dragId: string, targetId: string, after: boolean) {
 		if (dragId === targetId) return;
 		const next = conversations.filter((entry) => entry.id !== dragId);
 		const index = next.findIndex((entry) => entry.id === targetId);
 		if (index === -1) return;
-		next.splice(index, 0, conversations.find((entry) => entry.id === dragId)!);
+		next.splice(index + (after ? 1 : 0), 0, conversations.find((entry) => entry.id === dragId)!);
 		commitConversations(next);
 	}
 
@@ -286,8 +307,8 @@ export function App() {
 			>
 				<div className="sidebar-head">
 					<span className="sidebar-logo">
-						<SparklesIcon />
-						8lab Chat
+						<BotIcon />
+						Agente
 					</span>
 					<div className="sidebar-head-actions">
 						<button
@@ -356,7 +377,13 @@ export function App() {
 									key={entry.id}
 									className={`sidebar-item${entry.id === activeId ? ' active' : ''}${
 										entry.id === draggingId ? ' dragging' : ''
-									}${entry.id === dropTargetId ? ' drop-target' : ''}`}
+									}${
+										dropTarget?.id === entry.id
+											? dropTarget.after
+												? ' drop-after'
+												: ' drop-before'
+											: ''
+									}`}
 									draggable={renamingId !== entry.id}
 									onDragStart={(event) => {
 										setDraggingId(entry.id);
@@ -364,24 +391,26 @@ export function App() {
 										event.dataTransfer.setData('text/plain', entry.id);
 									}}
 									onDragOver={(event) => {
-										if (!draggingId) return;
+										if (!draggingId || draggingId === entry.id) return;
 										event.preventDefault();
 										event.dataTransfer.dropEffect = 'move';
-										if (dropTargetId !== entry.id) setDropTargetId(entry.id);
+										const after = dropAfter(event);
+										if (dropTarget?.id !== entry.id || dropTarget.after !== after)
+											setDropTarget({ id: entry.id, after });
 									}}
 									onDragLeave={() => {
-										if (dropTargetId === entry.id) setDropTargetId(null);
+										if (dropTarget?.id === entry.id) setDropTarget(null);
 									}}
 									onDrop={(event) => {
 										event.preventDefault();
 										const dragId = draggingId ?? event.dataTransfer.getData('text/plain');
-										if (dragId) moveConversation(dragId, entry.id);
+										if (dragId) moveConversation(dragId, entry.id, dropAfter(event));
 										setDraggingId(null);
-										setDropTargetId(null);
+										setDropTarget(null);
 									}}
 									onDragEnd={() => {
 										setDraggingId(null);
-										setDropTargetId(null);
+										setDropTarget(null);
 									}}
 								>
 									{renamingId === entry.id ? (

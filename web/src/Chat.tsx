@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ArrowDownIcon, ArrowUpIcon, StopIcon } from './icons.tsx';
+import { PASSCODE_KEY } from './App.tsx';
 
 const SUGGESTIONS = [
 	{
@@ -14,7 +15,7 @@ const SUGGESTIONS = [
 	},
 	{
 		label: '¿Qué puede hacer este agente?',
-		prompt: '¿Qué es 8lab y qué tareas puedes hacer por mí?',
+		prompt: '¿Qué es Agente y qué tareas puedes hacer por mí?',
 	},
 	{
 		label: 'Planifica una cena',
@@ -35,6 +36,13 @@ function messageText(message: FlueConversationMessage): string {
 		.join('\n');
 }
 
+// Short, predictable-width tool label so the reserved trailing room on the
+// reply's last line stays bounded.
+function toolLabel(name: string): string {
+	const short = name.replace(/^composio_/, '');
+	return short.length > 16 ? `${short.slice(0, 15)}…` : short;
+}
+
 export function Chat({
 	conversationId,
 	passcode,
@@ -47,7 +55,6 @@ export function Chat({
 	const [input, setInput] = useState('');
 	const [showScrollButton, setShowScrollButton] = useState(false);
 	const viewportRef = useRef<HTMLDivElement>(null);
-	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const bottomRef = useRef<HTMLDivElement>(null);
 	// While the user is anchored near the bottom, the view follows the
 	// streaming reply token by token; scrolling up unpins it.
@@ -82,32 +89,24 @@ export function Chat({
 		return null;
 	}, [agent.messages]);
 
-	// Whether reply text is actively streaming: everything before the first
-	// visible token (tool rounds, model deliberation) is dead air otherwise.
-	const textStarted = useMemo(() => {
-		for (const message of visible) {
-			for (const part of message.parts) {
-				if (part.type === 'text' && part.state === 'streaming' && part.text.length > 0) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}, [visible]);
+	const busy = agent.status === 'submitted' || agent.status === 'streaming';
+
+	// Whether the current turn already shows text (streaming or settled).
+	const lastMessage = visible[visible.length - 1];
+	const textStarted =
+		lastMessage?.role === 'assistant' &&
+		lastMessage.parts.some((part) => part.type === 'text' && part.text.length > 0);
 
 	const activityLabel = workingTool
-		? `Usando ${workingTool}…`
+		? `Usando ${toolLabel(workingTool)}…`
 		: agent.status === 'submitted'
 			? 'Pensando…'
 			: 'Trabajando…';
-	// While the agent is busy there is always something on screen: the tool
-	// notice, the streaming text, or the activity line. No dead frames. A
-	// running tool shows its notice even if earlier text is still open.
-	const showActivity =
-		(agent.status === 'submitted' || agent.status === 'streaming') &&
-		(!textStarted || workingTool !== null);
+	// A single indicator line: it holds the spot until the first token
+	// lands, then the reply takes its exact place. Nothing is ever rendered
+	// below the reply's text.
+	const showActivity = busy && !textStarted;
 
-	const busy = agent.status === 'submitted' || agent.status === 'streaming';
 	const failed = agent.failedSends.length > 0;
 	const connecting = agent.status === 'connecting' && !agent.historyReady;
 	// ChatGPT-style layout: with an empty thread the composer lives centered
@@ -123,15 +122,18 @@ export function Chat({
 		});
 	}, [agent.messages, agent.status, agent.historyReady]);
 
-	// Grow the textarea to fit its content without changing the width: when
-	// max-height kicks in the vertical scrollbar appears, so reserve its gutter
-	// up front to keep text from re-wrapping and jumping between lines.
+	// If the stored passcode was invalidated (e.g. changed server-side), the
+	// history load fails with 401 forever and the chat would hang on
+	// "Cargando conversación…". Clear it and let the gate ask again.
 	useEffect(() => {
-		const textarea = textareaRef.current;
-		if (!textarea) return;
-		textarea.style.height = 'auto';
-		textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
-	}, [input]);
+		if (
+			agent.status === 'error' &&
+			/401|unauthorized|passcode/i.test(String(agent.error ?? ''))
+		) {
+			localStorage.removeItem(PASSCODE_KEY);
+			location.reload();
+		}
+	}, [agent.status, agent.error]);
 
 	function handleScroll() {
 		const viewport = viewportRef.current;
@@ -197,9 +199,8 @@ export function Chat({
 			) : null}
 
 			<form className="input-group" onSubmit={(event) => void submit(event)}>
-				<textarea
-					ref={textareaRef}
-					className="input-group-textarea"
+			<textarea
+				className="input-group-textarea"
 					rows={1}
 					autoFocus
 					value={input}
@@ -241,7 +242,11 @@ export function Chat({
 				<div className="scroller-content">
 					{!agent.historyReady && visible.length === 0 ? (
 						<div className="empty-wrap">
-							<p className="thinking shimmer">Cargando conversación…</p>
+							<p className="thinking shimmer">
+								{agent.status === 'error'
+									? 'Passcode inválido. Volviendo a pedirlo…'
+									: 'Cargando conversación…'}
+							</p>
 						</div>
 					) : null}
 
@@ -251,8 +256,8 @@ export function Chat({
 								<div className="empty-header">
 									<div className="empty-title">¿En qué puedo ayudarte?</div>
 									<p className="empty-desc">
-										Escribe un mensaje al agente de 8lab y verás la respuesta en
-										tiempo real.
+										Escribe un mensaje al agente y verás la respuesta en tiempo
+										real.
 									</p>
 								</div>
 								<div className="composer-zone in-empty">{composer}</div>
@@ -278,25 +283,25 @@ export function Chat({
 						</div>
 					) : null}
 
-					{visible.map((message) =>
-						message.role === 'user' ? (
-							<article key={message.id} className="msg end">
-								<div className="msg-content">
-									<div className="bubble">{messageText(message)}</div>
+				{visible.map((message) =>
+					message.role === 'user' ? (
+						<article key={message.id} className="msg end">
+							<div className="msg-content">
+								<div className="bubble">{messageText(message)}</div>
+							</div>
+						</article>
+					) : (
+						<article key={message.id} className="msg">
+							<div className="msg-content">
+								<div className="typeset">
+									<ReactMarkdown remarkPlugins={[remarkGfm]}>
+										{messageText(message)}
+									</ReactMarkdown>
 								</div>
-							</article>
-						) : (
-							<article key={message.id} className="msg">
-								<div className="msg-content">
-									<div className="typeset">
-										<ReactMarkdown remarkPlugins={[remarkGfm]}>
-											{messageText(message)}
-										</ReactMarkdown>
-									</div>
-								</div>
-							</article>
-						),
-					)}
+							</div>
+						</article>
+					),
+				)}
 
 					{showActivity ? (
 						<div className="msg">

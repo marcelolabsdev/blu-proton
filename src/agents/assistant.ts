@@ -126,7 +126,7 @@ const composioConnectApp = defineTool({
 });
 
 export function Assistant() {
-	useModel('google/gemini-3.5-flash-lite');
+	useModel('google/gemini-3.5-flash-lite', { thinkingLevel: 'off' });
 	const composio = getComposio();
 	if (composio) {
 		useTool(composioToolkits);
@@ -176,6 +176,17 @@ export function Assistant() {
 			.filter(Boolean)
 			.join(' ');
 	}
+	// Web chat: flash-lite occasionally settles an empty candidate — no
+	// text parts, no tool calls — and the chat UI then shows nothing at
+	// all. Force one continued turn so the user always gets an answer.
+	useAgentFinish(({ response, append }) => {
+		if (response.toolCalls.length > 0 || response.usage.output > 0) return;
+		append({
+			kind: 'signal',
+			type: 'reminder',
+			body: 'Tu respuesta quedó vacía: ningún texto llegó al usuario. Responde ahora con tu mensaje completo en español.',
+		});
+	});
 	return [
 		'You are a friendly chat assistant. Keep replies clear, warm, and concise.',
 		'Always write your entire reply in Spanish, including titles, lists, and code comments — never mix in English sentences or fragments, even if the user writes in another language.',
