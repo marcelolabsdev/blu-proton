@@ -541,8 +541,8 @@ body {
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	scrollbar-gutter: stable;
+	overflow-anchor: none;
 	position: relative;
-	scroll-behavior: smooth;
 }
 
 .viewport::-webkit-scrollbar {
@@ -706,10 +706,31 @@ body {
 	display: flex;
 	align-items: center;
 	gap: 0.5rem;
-	height: 1.875rem;
-	padding: 0 0.75rem;
+	min-height: 1.75em;
 	font-size: 0.875rem;
 	color: var(--muted-foreground);
+}
+
+/* The activity indicator is a single pulsing dot — no words, so it can
+   never be mistaken for (or linger as) reply text. */
+.pulse-dot {
+	width: 0.625rem;
+	height: 0.625rem;
+	border-radius: 50%;
+	background: var(--foreground);
+	animation: pulse-dot 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+	0%,
+	100% {
+		opacity: 0.25;
+		transform: scale(0.75);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1);
+	}
 }
 
 .shimmer {

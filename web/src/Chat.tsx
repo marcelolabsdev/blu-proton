@@ -36,13 +36,6 @@ function messageText(message: FlueConversationMessage): string {
 		.join('\n');
 }
 
-// Short, predictable-width tool label so the reserved trailing room on the
-// reply's last line stays bounded.
-function toolLabel(name: string): string {
-	const short = name.replace(/^composio_/, '');
-	return short.length > 16 ? `${short.slice(0, 15)}…` : short;
-}
-
 export function Chat({
 	conversationId,
 	passcode,
@@ -55,7 +48,6 @@ export function Chat({
 	const [input, setInput] = useState('');
 	const [showScrollButton, setShowScrollButton] = useState(false);
 	const viewportRef = useRef<HTMLDivElement>(null);
-	const bottomRef = useRef<HTMLDivElement>(null);
 	// While the user is anchored near the bottom, the view follows the
 	// streaming reply token by token; scrolling up unpins it.
 	const pinnedToBottomRef = useRef(true);
@@ -70,24 +62,25 @@ export function Chat({
 	);
 	const agent = useFlueAgent({ client });
 
-	const visible = agent.messages.filter((message) => message.display === 'visible');
-
-	// A Composio tool currently executing: the reply pauses silently while it
-	// runs, so surface it as "Usando <tool>…" instead of a frozen chat.
-	const workingTool = useMemo(() => {
-		for (const message of agent.messages) {
-			for (const part of message.parts) {
-				if (
-					part.type === 'dynamic-tool' &&
-					part.state === 'input-available' &&
-					part.toolName.startsWith('composio')
-				) {
-					return part.toolName;
-				}
-			}
+	// The SDK appends an optimistic echo of each send (id `local:*`) and only
+	// drops it once the send receipt lands; meanwhile the live stream may
+	// already carry the canonical message, rendering the user's message twice
+	// for a few frames. Hide the echo while its canonical twin is the previous
+	// visible message.
+	const visible: FlueConversationMessage[] = [];
+	for (const message of agent.messages) {
+		if (message.display !== 'visible') continue;
+		const prev = visible[visible.length - 1];
+		if (
+			message.id.startsWith('local:') &&
+			message.role === 'user' &&
+			prev?.role === 'user' &&
+			messageText(prev) === messageText(message)
+		) {
+			continue;
 		}
-		return null;
-	}, [agent.messages]);
+		visible.push(message);
+	}
 
 	const busy = agent.status === 'submitted' || agent.status === 'streaming';
 
@@ -97,14 +90,9 @@ export function Chat({
 		lastMessage?.role === 'assistant' &&
 		lastMessage.parts.some((part) => part.type === 'text' && part.text.length > 0);
 
-	const activityLabel = workingTool
-		? `Usando ${toolLabel(workingTool)}…`
-		: agent.status === 'submitted'
-			? 'Pensando…'
-			: 'Trabajando…';
-	// A single indicator line: it holds the spot until the first token
-	// lands, then the reply takes its exact place. Nothing is ever rendered
-	// below the reply's text.
+	// A single indicator — an animated dot, no words — holds the spot until
+	// the first token lands, then the reply takes its exact place. Nothing
+	// is ever rendered below the reply's text.
 	const showActivity = busy && !textStarted;
 
 	const failed = agent.failedSends.length > 0;
@@ -115,11 +103,15 @@ export function Chat({
 
 	useEffect(() => {
 		if (!pinnedToBottomRef.current) return;
-		bottomRef.current?.scrollIntoView({
-			// Instant jumps while streaming keep the view glued to the growing
-			// text; smooth would lag behind rapid updates.
-			behavior: agent.status === 'streaming' ? 'auto' : 'smooth',
-		});
+		// Scroll ONLY the chat viewport: scrollIntoView() would also drag
+		// every scrollable ancestor (the document itself), making the whole
+		// layout — composer included — dip on every stream chunk.
+		const viewport = viewportRef.current;
+		if (!viewport) return;
+		// 'instant' (not 'auto'): 'auto' would honor any CSS scroll-behavior,
+		// and animated scrolls interrupted by the next chunk produce a tiny
+		// bounce right as the reply starts.
+		viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'instant' });
 	}, [agent.messages, agent.status, agent.historyReady]);
 
 	// If the stored passcode was invalidated (e.g. changed server-side), the
@@ -303,15 +295,15 @@ export function Chat({
 					),
 				)}
 
-					{showActivity ? (
-						<div className="msg">
-							<div className="thinking">
-								<span className="shimmer">{activityLabel}</span>
+				{showActivity ? (
+					<article className="msg">
+						<div className="msg-content">
+							<div className="typeset">
+								<span className="pulse-dot" />
 							</div>
 						</div>
-					) : null}
-
-					<div ref={bottomRef} />
+					</article>
+				) : null}
 				</div>
 
 				<button
