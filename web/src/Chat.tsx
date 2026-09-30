@@ -84,16 +84,50 @@ export function Chat({
 
 	const busy = agent.status === 'submitted' || agent.status === 'streaming';
 
-	// Whether the current turn already shows text (streaming or settled).
+	// The live stream delivers text deltas coalesced into ~1s batches, so the
+	// raw feed jumps in big chunks. Reveal the last assistant message
+	// character by character (typewriter) so replies appear progressively.
 	const lastMessage = visible[visible.length - 1];
-	const textStarted =
-		lastMessage?.role === 'assistant' &&
-		lastMessage.parts.some((part) => part.type === 'text' && part.text.length > 0);
+	const lastAssistant = lastMessage?.role === 'assistant' ? lastMessage : undefined;
+	const targetText = lastAssistant ? messageText(lastAssistant) : '';
+	const targetId = lastAssistant?.id ?? '';
+
+	const [reveal, setReveal] = useState<{ id: string; count: number }>({
+		id: '',
+		count: 0,
+	});
+
+	useEffect(() => {
+		if (!targetId) return;
+		const timer = setInterval(() => {
+			setReveal((prev) => {
+				if (prev.id !== targetId) {
+					// A fresh target reveals from zero only while a response is
+					// live; settled history (re)loads fully revealed.
+					return { id: targetId, count: busy ? 0 : targetText.length };
+				}
+				if (prev.count >= targetText.length) return prev;
+				const step = Math.max(
+					1,
+					Math.ceil((targetText.length - prev.count) * 0.15),
+				);
+				return {
+					id: targetId,
+					count: Math.min(targetText.length, prev.count + step),
+				};
+			});
+		}, 40);
+		return () => clearInterval(timer);
+	}, [targetId, targetText.length, busy]);
+
+	const revealedCount =
+		reveal.id === targetId ? Math.min(reveal.count, targetText.length) : 0;
+	const revealing = !!lastAssistant && revealedCount < targetText.length;
 
 	// A single indicator — an animated dot, no words — holds the spot until
-	// the first token lands, then the reply takes its exact place. Nothing
-	// is ever rendered below the reply's text.
-	const showActivity = busy && !textStarted;
+	// the first revealed character lands, then the reply takes its exact
+	// place. Nothing is ever rendered below the reply's text.
+	const showActivity = busy && revealedCount === 0;
 
 	const failed = agent.failedSends.length > 0;
 	const connecting = agent.status === 'connecting' && !agent.historyReady;
@@ -112,7 +146,7 @@ export function Chat({
 		// and animated scrolls interrupted by the next chunk produce a tiny
 		// bounce right as the reply starts.
 		viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'instant' });
-	}, [agent.messages, agent.status, agent.historyReady]);
+	}, [agent.messages, agent.status, agent.historyReady, revealedCount]);
 
 	// If the stored passcode was invalidated (e.g. changed server-side), the
 	// history load fails with 401 forever and the chat would hang on
@@ -285,17 +319,25 @@ export function Chat({
 					) : (
 						<article key={message.id} className="msg">
 							<div className="msg-content">
-								<div className="typeset">
-									<ReactMarkdown remarkPlugins={[remarkGfm]}>
-										{messageText(message)}
-									</ReactMarkdown>
-								</div>
+								{message.id === targetId && revealedCount === 0 ? (
+									<div className="typeset">
+										<span className="pulse-dot" />
+									</div>
+								) : (
+									<div className="typeset">
+										<ReactMarkdown remarkPlugins={[remarkGfm]}>
+											{message.id === targetId
+												? `${targetText.slice(0, revealedCount)}${busy || revealing ? ' ▍' : ''}`
+												: messageText(message)}
+										</ReactMarkdown>
+									</div>
+								)}
 							</div>
 						</article>
 					),
 				)}
 
-				{showActivity ? (
+				{showActivity && !lastAssistant ? (
 					<article className="msg">
 						<div className="msg-content">
 							<div className="typeset">
