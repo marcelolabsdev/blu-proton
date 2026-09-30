@@ -6,9 +6,11 @@ import {
 	useModel,
 	useTool,
 	defineTool,
+	observe,
+	type AgentProps,
 } from '@flue/runtime';
 import * as v from 'valibot';
-import { postMessage } from '../channels/telegram.ts';
+import { sendTelegramText } from '../channels/telegram.ts';
 
 const chatData = v.object({
 	type: v.literal('chat'),
@@ -59,6 +61,25 @@ async function getComposioSession() {
 function json(value: unknown): string {
 	return typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 }
+
+// Last assistant text per instance, captured from live turn events so
+// useAgentFinish can deliver it to Telegram without another model turn.
+const lastReplyText = new Map<string, string>();
+observe((event) => {
+	if (event.type !== 'turn' || event.isError || event.purpose !== 'agent')
+		return;
+	const instanceId = event.instanceId;
+	const output = event.response.output;
+	if (!instanceId || !output) return;
+	const text = output.content
+		.flatMap((part) => (part.type === 'text' ? [part.text] : []))
+		.join('')
+		.trim();
+	if (!text) return;
+	lastReplyText.set(instanceId, text);
+	if (lastReplyText.size > 128)
+		lastReplyText.delete(lastReplyText.keys().next().value!);
+});
 
 const composioToolkits = defineTool({
 	name: 'composio_toolkits',
@@ -125,8 +146,11 @@ const composioConnectApp = defineTool({
 	},
 });
 
-export function Assistant() {
-	useModel('google/gemini-3.5-flash-lite', { thinkingLevel: 'off' });
+export function Assistant({ id }: AgentProps) {
+	useModel('google/gemini-3.5-flash-lite', {
+		thinkingLevel: 'off',
+		compaction: { reserveTokens: 1_000_000 },
+	});
 	const composio = getComposio();
 	if (composio) {
 		useTool(composioToolkits);
@@ -151,24 +175,24 @@ export function Assistant() {
 		].join(' ')
 		: '';
 	if (data) {
-		useTool(postMessage(data));
-		// Enforcement: flash models sometimes answer with plain text and skip
-		// the post_telegram_message call, losing the reply entirely. Append a
-		// reminder so the same response does another turn and posts it.
-		useAgentFinish(({ response, append }) => {
-			const posted = response.toolCalls.some(
-				(call) => call.tool === 'post_telegram_message' && !call.isError,
-			);
-			if (posted) return;
-			append({
-				kind: 'signal',
-				type: 'reminder',
-				body: 'Terminaste sin llamar a post_telegram_message — nada llegó al usuario. Llámala ahora con tu respuesta como text.',
-			});
+		// Delivery: the model answers in plain text and the finish hook posts
+		// it to Telegram directly — exactly one model turn per message, no
+		// post-tool continuation and no reminder re-run when it already replied.
+		useAgentFinish(async ({ append }) => {
+			const text = lastReplyText.get(id);
+			if (!text) {
+				append({
+					kind: 'signal',
+					type: 'reminder',
+					body: 'Tu respuesta quedó vacía: nada llegó al usuario. Responde ahora con tu mensaje completo en español.',
+				});
+				return;
+			}
+			await sendTelegramText(data, text);
 		});
 		return [
 			'You are a friendly chat assistant living in a Telegram conversation.',
-			'Reply to every user message by calling the `post_telegram_message` tool with your answer as `text`.',
+			'Reply to every user message with your full answer as the message text; delivery to the chat is automatic, no tool needed.',
 			'Keep replies short and Telegram-friendly (plain text, no heavy markdown).',
 			'Always write your entire reply in Spanish, including titles, lists, and code comments — never mix in English sentences or fragments, even if the user writes in another language.',
 			composioPrompt,

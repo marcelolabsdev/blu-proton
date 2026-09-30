@@ -3,10 +3,9 @@ import {
 	createTelegramChannel,
 	type TelegramConversationRef,
 } from '@flue/telegram';
-import { defineTool, dispatch } from '@flue/runtime';
+import { dispatch } from '@flue/runtime';
 import { Api } from 'grammy';
 import type { Message } from 'grammy/types';
-import * as v from 'valibot';
 import { Assistant } from '../agents/assistant.ts';
 
 export const client = new Api(process.env.TELEGRAM_BOT_TOKEN!);
@@ -129,25 +128,28 @@ function conversationData(
 	};
 }
 
-export function postMessage(ref: TelegramConversationRef) {
-	return defineTool({
-		name: 'post_telegram_message',
-		description: 'Post a message to the Telegram conversation bound to this agent.',
-		input: v.object({ text: v.pipe(v.string(), v.minLength(1)) }),
-		async run({ data }) {
-			const { text } = data;
-			const message = await client.sendMessage(ref.chatId, text, {
-				...(ref.type === 'business-chat'
-					? { business_connection_id: ref.businessConnectionId }
-					: {}),
-				...(ref.messageThreadId
-					? { message_thread_id: ref.messageThreadId }
-					: {}),
-				...(ref.directMessagesTopicId
-					? { direct_messages_topic_id: ref.directMessagesTopicId }
-					: {}),
-			});
-			return { output: { messageId: message.message_id } };
-		},
+export interface TelegramDestination {
+	type: 'chat' | 'business-chat';
+	chatId: number;
+	businessConnectionId?: string;
+	messageThreadId?: number;
+	directMessagesTopicId?: number;
+}
+
+export async function sendTelegramText(
+	destination: TelegramDestination,
+	text: string,
+): Promise<number> {
+	const message = await client.sendMessage(destination.chatId, text, {
+		...(destination.type === 'business-chat' && destination.businessConnectionId
+			? { business_connection_id: destination.businessConnectionId }
+			: {}),
+		...(destination.messageThreadId
+			? { message_thread_id: destination.messageThreadId }
+			: {}),
+		...(destination.directMessagesTopicId
+			? { direct_messages_topic_id: destination.directMessagesTopicId }
+			: {}),
 	});
+	return message.message_id;
 }
